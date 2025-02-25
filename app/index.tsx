@@ -18,7 +18,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 type Reminder = {
   id: string;
   text: string;
-  time: string;
+  time: string; // ISO string of the selected date & time
   notificationId: string;
 };
 
@@ -27,12 +27,14 @@ export default function App(): JSX.Element {
   const [reminders, setReminders] = useState<Reminder[]>([]);
   // Controls modal visibility for adding a reminder
   const [modalVisible, setModalVisible] = useState<boolean>(false);
-  // For the reminder message
+  // Reminder message text
   const [newReminderText, setNewReminderText] = useState<string>('');
-  // For mobile: store the selected time as a Date
+  // For mobile: store the selected date and time separately
+  const [newReminderDate, setNewReminderDate] = useState<Date>(new Date());
   const [newReminderTime, setNewReminderTime] = useState<Date>(new Date());
-  // For web: store the time input string ("HH:MM")
-  const [webTime, setWebTime] = useState<string>('');
+  // For web: store the date and time input strings
+  const [webDate, setWebDate] = useState<string>(''); // format: "YYYY-MM-DD"
+  const [webTime, setWebTime] = useState<string>(''); // format: "HH:MM"
 
   useEffect(() => {
     requestPermissions();
@@ -70,17 +72,15 @@ export default function App(): JSX.Element {
     }
   };
 
-  // Schedule a daily notification with the reminder message (skip on web)
+  // Schedule a one-time notification for the given date/time with the message.
   const scheduleNotificationForReminder = async (
-    selectedTime: Date,
+    selectedDateTime: Date,
     message: string
   ): Promise<string> => {
     if (Platform.OS === 'web') {
       console.warn('Notifications are not available on web. Skipping scheduling.');
       return 'web-dummy-notification-id';
     }
-    const trigger = new Date(selectedTime);
-    trigger.setSeconds(0);
     const notificationId = await Notifications.scheduleNotificationAsync({
       content: {
         // Only the message text is displayed in the notification.
@@ -89,18 +89,31 @@ export default function App(): JSX.Element {
         data: { customData: 'Reminder notification' },
         sound: 'default',
       },
-      trigger: { hour: trigger.getHours(), minute: trigger.getMinutes(), repeats: true },
+      // When you pass a Date object as trigger, the notification is scheduled for that exact time.
+      trigger: selectedDateTime,
     });
     return notificationId;
   };
 
+  // Combine the selected date and time into one Date object.
+  const combineDateAndTime = (date: Date, time: Date): Date => {
+    const combined = new Date(date);
+    combined.setHours(time.getHours(), time.getMinutes(), time.getSeconds(), 0);
+    return combined;
+  };
+
   // Add a reminder, schedule its notification, and store it offline
-  const addReminder = async (selectedTime: Date, message: string) => {
-    const notificationId = await scheduleNotificationForReminder(selectedTime, message);
+  const addReminder = async (selectedDateTime: Date, message: string) => {
+    // If the selected date/time is in the past, alert the user.
+    if (selectedDateTime.getTime() < Date.now()) {
+      Alert.alert('Invalid Time', 'Please select a future date and time.');
+      return;
+    }
+    const notificationId = await scheduleNotificationForReminder(selectedDateTime, message);
     const newReminder: Reminder = {
       id: Date.now().toString(),
       text: message,
-      time: selectedTime.toISOString(),
+      time: selectedDateTime.toISOString(),
       notificationId,
     };
 
@@ -109,7 +122,7 @@ export default function App(): JSX.Element {
     await saveReminders(updatedReminders);
     Alert.alert(
       'Reminder Set',
-      `Reminder "${message}" set for ${selectedTime.toLocaleTimeString()}.`
+      `Reminder "${message}" set for ${selectedDateTime.toLocaleString()}.`
     );
   };
 
@@ -124,40 +137,40 @@ export default function App(): JSX.Element {
     await saveReminders(updatedReminders);
   };
 
-  // Called when user taps Save in the add reminder modal.
+  // Called when the user taps Save in the add reminder modal.
   const handleSaveReminder = () => {
     if (!newReminderText.trim()) {
       Alert.alert('Input Required', 'Please enter a reminder text.');
       return;
     }
-    let selectedTime: Date;
+    let selectedDateTime: Date;
     if (Platform.OS === 'web') {
-      if (!webTime) {
-        Alert.alert('Input Required', 'Please choose a time.');
+      if (!webDate || !webTime) {
+        Alert.alert('Input Required', 'Please choose a date and time.');
         return;
       }
-      const [hours, minutes] = webTime.split(':').map(Number);
-      selectedTime = new Date();
-      selectedTime.setHours(hours);
-      selectedTime.setMinutes(minutes);
-      selectedTime.setSeconds(0);
+      // Combine webDate (YYYY-MM-DD) and webTime (HH:MM) into a Date object.
+      selectedDateTime = new Date(`${webDate}T${webTime}:00`);
+      // Clear web inputs.
+      setWebDate('');
       setWebTime('');
     } else {
-      selectedTime = newReminderTime;
+      // Combine the mobile date and time pickers.
+      selectedDateTime = combineDateAndTime(newReminderDate, newReminderTime);
     }
-    addReminder(selectedTime, newReminderText);
+    addReminder(selectedDateTime, newReminderText);
     setNewReminderText('');
     setModalVisible(false);
   };
 
-  // Render each reminder card in the list, displaying both text and time.
+  // Render each reminder card in the list, showing the text and date/time.
   const renderReminder = ({ item }: { item: Reminder }) => {
-    const displayTime = new Date(item.time).toLocaleTimeString();
+    const displayDateTime = new Date(item.time).toLocaleString();
     return (
       <View style={styles.reminderItem}>
         <View>
           <Text style={styles.reminderText}>{item.text}</Text>
-          <Text style={styles.reminderTime}>{displayTime}</Text>
+          <Text style={styles.reminderTime}>{displayDateTime}</Text>
         </View>
         <TouchableOpacity
           style={styles.deleteButton}
@@ -173,10 +186,7 @@ export default function App(): JSX.Element {
     <LinearGradient colors={['#FFDEE9', '#B5FFFC']} style={styles.gradient}>
       <View style={styles.container}>
         <Text style={styles.title}>Offline Reminder App</Text>
-        <TouchableOpacity
-          style={styles.addButton}
-          onPress={() => setModalVisible(true)}
-        >
+        <TouchableOpacity style={styles.addButton} onPress={() => setModalVisible(true)}>
           <Text style={styles.addButtonText}>Add Reminder</Text>
         </TouchableOpacity>
 
@@ -201,37 +211,55 @@ export default function App(): JSX.Element {
           <View style={styles.modalOverlay}>
             <View style={styles.modalContainer}>
               <Text style={styles.modalTitle}>Add Reminder</Text>
-              
               {/* Reminder Text Input */}
               <TextInput
                 style={styles.textInput}
-                placeholder="Enter reminder text"
+                placeholder="Enter reminder text (e.g. Write exam)"
                 value={newReminderText}
                 onChangeText={setNewReminderText}
               />
-
-              {/* Time Input */}
               {Platform.OS === 'web' ? (
-                <input
-                  type="time"
-                  value={webTime}
-                  onChange={(e) => setWebTime(e.target.value)}
-                  style={styles.webInput as any}
-                />
+                <>
+                  <input
+                    type="date"
+                    value={webDate}
+                    onChange={(e) => setWebDate(e.target.value)}
+                    style={styles.webInput as any}
+                  />
+                  <input
+                    type="time"
+                    value={webTime}
+                    onChange={(e) => setWebTime(e.target.value)}
+                    style={styles.webInput as any}
+                  />
+                </>
               ) : (
-                <DateTimePicker
-                  value={newReminderTime}
-                  mode="time"
-                  is24Hour={true}
-                  display="spinner"
-                  onChange={(event: Event, selectedTime?: Date) => {
-                    if (selectedTime) {
-                      setNewReminderTime(selectedTime);
-                    }
-                  }}
-                />
+                <>
+                  <Text style={styles.label}>Select Date:</Text>
+                  <DateTimePicker
+                    value={newReminderDate}
+                    mode="date"
+                    display="default"
+                    onChange={(_event: Event, selectedDate?: Date) => {
+                      if (selectedDate) {
+                        setNewReminderDate(selectedDate);
+                      }
+                    }}
+                  />
+                  <Text style={styles.label}>Select Time:</Text>
+                  <DateTimePicker
+                    value={newReminderTime}
+                    mode="time"
+                    is24Hour={true}
+                    display="spinner"
+                    onChange={(event: Event, selectedTime?: Date) => {
+                      if (selectedTime) {
+                        setNewReminderTime(selectedTime);
+                      }
+                    }}
+                  />
+                </>
               )}
-
               <View style={styles.modalButtons}>
                 <TouchableOpacity
                   style={[styles.modalButton, styles.cancelButton]}
@@ -351,6 +379,11 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '600',
     marginBottom: 20,
+    textAlign: 'center',
+  },
+  label: {
+    fontSize: 16,
+    marginVertical: 8,
     textAlign: 'center',
   },
   textInput: {
